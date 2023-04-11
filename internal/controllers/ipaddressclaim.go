@@ -59,11 +59,11 @@ func (r *IPAddressClaimReconciler) SetupWithManager(ctx context.Context, mgr ctr
 			predicate.Or(
 				ipampredicates.ClaimReferencesPoolKind(metav1.GroupKind{
 					Group: v1alpha1.GroupVersion.Group,
-					Kind:  "InClusterIPPool",
+					Kind:  inClusterIPPoolKind,
 				}),
 				ipampredicates.ClaimReferencesPoolKind(metav1.GroupKind{
 					Group: v1alpha1.GroupVersion.Group,
-					Kind:  "GlobalInClusterIPPool",
+					Kind:  globalInClusterIPPoolKind,
 				}),
 			),
 		)).
@@ -104,7 +104,7 @@ func (r *IPAddressClaimReconciler) SetupWithManager(ctx context.Context, mgr ctr
 		Owns(&ipamv1.IPAddress{}, builder.WithPredicates(
 			ipampredicates.AddressReferencesPoolKind(metav1.GroupKind{
 				Group: v1alpha1.GroupVersion.Group,
-				Kind:  "InClusterIPPool",
+				Kind:  inClusterIPPoolKind,
 			}),
 		)).
 		WithEventFilter(predicates.ResourceNotPausedAndHasFilterLabel(ctrl.LoggerFrom(ctx), r.WatchFilterValue)).
@@ -142,12 +142,6 @@ func (r *IPAddressClaimReconciler) inClusterIPPoolToIPClaims(kind string) func(c
 	}
 }
 
-//+kubebuilder:rbac:groups=ipam.cluster.x-k8s.io,resources=inclusterippools,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=ipam.cluster.x-k8s.io,resources=inclusterippools/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=ipam.cluster.x-k8s.io,resources=inclusterippools/finalizers,verbs=update
-//+kubebuilder:rbac:groups=ipam.cluster.x-k8s.io,resources=globalinclusterippools,verbs=get;list;watch;create;update;patch;delete
-//+kubebuilder:rbac:groups=ipam.cluster.x-k8s.io,resources=globalinclusterippools/status,verbs=get;update;patch
-//+kubebuilder:rbac:groups=ipam.cluster.x-k8s.io,resources=globalinclusterippools/finalizers,verbs=update
 //+kubebuilder:rbac:groups=ipam.cluster.x-k8s.io,resources=ipaddressclaims,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=ipam.cluster.x-k8s.io,resources=ipaddresses,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=ipam.cluster.x-k8s.io,resources=ipaddressclaims/status;ipaddresses/status,verbs=get;update;patch
@@ -171,9 +165,14 @@ func (r *IPAddressClaimReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	cluster, err := clusterutil.GetClusterFromMetadata(ctx, r.Client, claim.ObjectMeta)
 	if err == nil {
 		if annotations.IsPaused(cluster, claim) {
-			log.Info("IPAddressClaim linked to a cluster that is paused")
+			log.Info("IPAddressClaim linked to a cluster that is paused, skipping reconciliation")
 			return reconcile.Result{}, nil
 		}
+	}
+
+	if annotations.HasPaused(claim) {
+		log.Info("IPAddressClaim is paused, skipping reconciliation.")
+		return reconcile.Result{}, nil
 	}
 
 	patchHelper, err := patch.NewHelper(claim, r.Client)
@@ -189,13 +188,13 @@ func (r *IPAddressClaimReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	var pool pooltypes.GenericInClusterPool
 
-	if claim.Spec.PoolRef.Kind == "InClusterIPPool" {
+	if claim.Spec.PoolRef.Kind == inClusterIPPoolKind {
 		icippool := &v1alpha1.InClusterIPPool{}
 		if err := r.Client.Get(ctx, types.NamespacedName{Namespace: claim.Namespace, Name: claim.Spec.PoolRef.Name}, icippool); err != nil && !apierrors.IsNotFound(err) {
 			return ctrl.Result{}, errors.Wrap(err, "failed to fetch pool")
 		}
 		pool = icippool
-	} else if claim.Spec.PoolRef.Kind == "GlobalInClusterIPPool" {
+	} else if claim.Spec.PoolRef.Kind == globalInClusterIPPoolKind {
 		gicippool := &v1alpha1.GlobalInClusterIPPool{}
 		if err := r.Client.Get(ctx, types.NamespacedName{Name: claim.Spec.PoolRef.Name}, gicippool); err != nil && !apierrors.IsNotFound(err) {
 			return ctrl.Result{}, errors.Wrap(err, "failed to fetch pool")
